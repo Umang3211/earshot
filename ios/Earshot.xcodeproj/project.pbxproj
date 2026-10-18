@@ -10,6 +10,7 @@
 		25FF2955F9D77980C1D2EA6B /* Listener.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8EB2FEC30D0A10B73F98C38 /* Listener.swift */; };
 		39170B113568BA072B1C9BAA /* Brain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AE7C6F6DD1410141B233D0 /* Brain.swift */; };
 		40AD23BC9785F2A9BB4BADB0 /* API.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6384FF04D71E8D2D9F912E /* API.swift */; };
+		54D9C8FE0D4633F9B21C0FEE /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9532783DCED96615CBDC9630 /* Theme.swift */; };
 		7986C4349CC045A894EC7D9A /* AudioRig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8BC6FB184A6013C712083EB /* AudioRig.swift */; };
 		AD94BCF70CA9664C7D14AD69 /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = 122ABC40B660C25B11874C13 /* Views.swift */; };
 		C800C9507B735ED67F2D1A7F /* Whisperer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFCA64754F298EE49B2D372E /* Whisperer.swift */; };
@@ -21,6 +22,7 @@
 		1B015E8DA9E2323EAC11E087 /* MapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapView.swift; sourceTree = "<group>"; };
 		3C6384FF04D71E8D2D9F912E /* API.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = API.swift; sourceTree = "<group>"; };
 		87AE7C6F6DD1410141B233D0 /* Brain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Brain.swift; sourceTree = "<group>"; };
+		9532783DCED96615CBDC9630 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		A8BC6FB184A6013C712083EB /* AudioRig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRig.swift; sourceTree = "<group>"; };
 		A8EB2FEC30D0A10B73F98C38 /* Listener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Listener.swift; sourceTree = "<group>"; };
 		D417CBEB2EF403CE505CD8E9 /* Earshot.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Earshot.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -52,6 +54,7 @@
 				87AE7C6F6DD1410141B233D0 /* Brain.swift */,
 				A8EB2FEC30D0A10B73F98C38 /* Listener.swift */,
 				1B015E8DA9E2323EAC11E087 /* MapView.swift */,
+				9532783DCED96615CBDC9630 /* Theme.swift */,
 				122ABC40B660C25B11874C13 /* Views.swift */,
 				DFCA64754F298EE49B2D372E /* Whisperer.swift */,
 			);
@@ -122,6 +125,7 @@
 				39170B113568BA072B1C9BAA /* Brain.swift in Sources */,
 				25FF2955F9D77980C1D2EA6B /* Listener.swift in Sources */,
 				E2B9CF8B06DD65AD2144036D /* MapView.swift in Sources */,
+				54D9C8FE0D4633F9B21C0FEE /* Theme.swift in Sources */,
 				AD94BCF70CA9664C7D14AD69 /* Views.swift in Sources */,
 				C800C9507B735ED67F2D1A7F /* Whisperer.swift in Sources */,
 			);
