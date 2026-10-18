@@ -11,6 +11,7 @@ struct MapView: View {
             WebPage(url: URL(string: API.base + "/?embed=1"), reload: reload)
                 .ignoresSafeArea(edges: .bottom)
                 .navigationTitle("Network")
+                .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
@@ -36,6 +37,7 @@ private struct WebPage: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let v = WKWebView()
         v.isOpaque = false
+        v.underPageBackgroundColor = .black
         v.backgroundColor = .clear
         v.scrollView.isScrollEnabled = false
         return v
