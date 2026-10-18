@@ -197,7 +197,10 @@ def embed(wav: bytes) -> tuple[np.ndarray | None, float]:
     if len(audio) >= frame:
         n = len(audio) // frame
         rms = np.sqrt((audio[: n * frame].reshape(n, frame) ** 2).mean(axis=1))
-        gate = max(0.006, float(np.percentile(rms, 20)) * 2.0)
+        # Relative to this clip's own level: a phone in a pocket or a quiet room
+        # is far below any fixed floor.
+        floor, loud = np.percentile(rms, [20, 90])
+        gate = max(1e-4, min(float(floor) * 2.0, float(loud) * 0.5))
         voiced = np.repeat(rms > gate, frame)
         speech = audio[: n * frame][voiced]
     else:
