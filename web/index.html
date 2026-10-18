@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Earshot</title>
+<style>
+:root {
+  --bg: #f7f7fb; --panel: #ffffff; --ink: #16161d; --muted: #6b6b7b; --faint: #b9b9c8;
+  --line: #e6e6ef; --accent: #5b4fe0; --accent-soft: #ecebfd; --warn: #d97706; --ok: #0f9f8f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e0e13; --panel: #17171f; --ink: #ececf3; --muted: #9a9aab; --faint: #4a4a5a;
+    --line: #262633; --accent: #8b82ff; --accent-soft: #24223f; --warn: #f59e0b; --ok: #2dd4bf;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e0e13; --panel: #17171f; --ink: #ececf3; --muted: #9a9aab; --faint: #4a4a5a;
+  --line: #262633; --accent: #8b82ff; --accent-soft: #24223f; --warn: #f59e0b; --ok: #2dd4bf;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; }
+header { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { margin: 0; font-size: 19px; letter-spacing: -0.01em; }
+header .stats { color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 4px; margin-left: auto; }
+nav button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+nav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+main { display: grid; grid-template-columns: 1fr 360px; height: calc(100% - 59px); }
+#mapwrap { position: relative; overflow: hidden; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.legend { position: absolute; left: 16px; bottom: 16px; display: flex; gap: 14px; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); padding: 7px 12px; border-radius: 10px; }
+.legend i { display: inline-block; width: 18px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 5px; }
+.empty[hidden] { display: none; }
+.empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 24px; pointer-events: none; }
+aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 18px; }
+.search { width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); font: inherit; margin-bottom: 12px; }
+.row { padding: 10px 8px; border-radius: 10px; cursor: pointer; }
+.row:hover, .row.on { background: var(--accent-soft); }
+.row b { display: block; }
+.row span { color: var(--muted); font-size: 13px; }
+.k { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 18px 0 6px; }
+.big { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; margin: 0; }
+.sub { color: var(--muted); margin: 2px 0 0; }
+ul { margin: 0; padding-left: 18px; }
+li { margin: 3px 0; }
+.said { border-left: 2px solid var(--line); padding: 2px 0 2px 10px; margin: 8px 0; font-size: 14px; }
+.said small { display: block; color: var(--faint); font-size: 11px; }
+.chip { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); margin: 0 4px 4px 0; }
+.back { border: 0; background: none; color: var(--accent); font: inherit; padding: 0; cursor: pointer; margin-bottom: 8px; }
+.ask { display: flex; gap: 8px; }
+.ask input { flex: 1; }
+.ask button, .btn { border: 0; background: var(--accent); color: white; border-radius: 10px; padding: 0 14px; font: inherit; font-weight: 600; cursor: pointer; }
+.answer { background: var(--accent-soft); border-radius: 12px; padding: 12px 14px; margin-top: 10px; }
+.err { color: var(--warn); font-size: 13px; }
+body.embed header { display: none; }
+body.embed main { height: 100%; }
+@media (max-width: 760px) {
+  header { padding: 12px 16px; flex-wrap: wrap; }
+  nav { margin-left: 0; width: 100%; overflow-x: auto; }
+  main { grid-template-columns: 1fr; grid-template-rows: 55% 45%; height: calc(100% - 100px); }
+  body.embed main { height: 100%; }
+  aside { border-left: 0; border-top: 1px solid var(--line); padding: 16px; }
+  .legend { left: 12px; bottom: 12px; gap: 10px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Earshot</h1>
+  <div class="stats" id="stats"></div>
+  <nav>
+    <button data-tab="people" class="on">People</button>
+    <button data-tab="events">Events</button>
+    <button data-tab="ask">Ask</button>
+  </nav>
+</header>
+<main>
+  <div id="mapwrap">
+    <canvas id="map"></canvas>
+    <div class="empty" id="empty" hidden>Nobody on the map yet.<br>Start Earshot on your phone and say hi to someone.</div>
+    <div class="legend"><span><i style="border-color:var(--faint)"></i>met</span><span><i style="border-color:var(--accent);border-top-style:dashed"></i>same event</span><span><i style="border-color:var(--ok)"></i>same org</span></div>
+  </div>
+  <aside id="side"></aside>
+</main>
+<script>
+const qs = new URLSearchParams(location.search);
+if (qs.has("embed")) document.body.classList.add("embed");
+const API = qs.get("api") || "";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ago = ts => {
+  const d = (Date.now() / 1000 - ts) / 86400;
+  if (d < 1 / 24) return "just now";
+  if (d < 1) return Math.round(d * 24) + "h ago";
+  if (d < 30) return Math.round(d) + "d ago";
+  return new Date(ts * 1000).toLocaleDateString();
+};
+const get = p => fetch(API + p).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+
+let people = [], sessions = [], tab = "people", selected = null, query = "";
+
+// ---------- map ----------
+const cv = $("#map"), ctx = cv.getContext("2d");
+let nodes = [], links = [], view = { x: 0, y: 0, k: 1 }, hover = null, dpr = 1;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const hue = s => { let h = 0; for (const c of (s || "").toLowerCase()) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const orgColor = o => o ? `hsl(${hue(o)} 62% 56%)` : css("--faint");
+
+function size() {
+  dpr = window.devicePixelRatio || 1;
+  cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
+}
+function radius(n) { return n.kind === "me" ? 16 : 7 + Math.min(8, (n.times_met || 1) * 2); }
+
+function setGraph(g) {
+  const old = Object.fromEntries(nodes.map(n => [n.id, n]));
+  nodes = g.nodes.map((n, i) => {
+    const o = old[n.id];
+    const a = i * 2.4, r = 120 + 30 * Math.sqrt(i);
+    return Object.assign(n, o ? { x: o.x, y: o.y, vx: 0, vy: 0 } : { x: Math.cos(a) * r, y: Math.sin(a) * r, vx: 0, vy: 0 });
+  });
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+  links = g.links.map(l => ({ ...l, s: byId[l.source], t: byId[l.target] })).filter(l => l.s && l.t);
+  const me = byId.me; if (me) { me.x = 0; me.y = 0; }
+  $("#empty").hidden = nodes.length > 1;
+  heat = 1;
+}
+
+let heat = 1;
+function step() {
+  if (heat < 0.002) return;
+  for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+    const a = nodes[i], b = nodes[j];
+    let dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy + 0.01;
+    const f = 2600 / d2, d = Math.sqrt(d2);
+    dx /= d; dy /= d;
+    a.vx -= dx * f; a.vy -= dy * f; b.vx += dx * f; b.vy += dy * f;
+  }
+  for (const l of links) {
+    const want = l.kind === "met" ? 150 : l.kind === "same_org" ? 60 : 95;
+    const k = l.kind === "met" ? 0.012 : 0.03;
+    let dx = l.t.x - l.s.x, dy = l.t.y - l.s.y, d = Math.hypot(dx, dy) || 1;
+    const f = (d - want) * k;
+    dx /= d; dy /= d;
+    l.s.vx += dx * f; l.s.vy += dy * f; l.t.vx -= dx * f; l.t.vy -= dy * f;
+  }
+  for (const n of nodes) {
+    if (n.kind === "me" || n === drag) { n.vx = n.vy = 0; continue; }
+    n.vx -= n.x * 0.002; n.vy -= n.y * 0.002;
+    n.vx *= 0.82; n.vy *= 0.82;
+    n.x += n.vx * heat; n.y += n.vy * heat;
+  }
+  heat *= 0.992;
+}
+
+function draw() {
+  step();
+  const w = cv.width, h = cv.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k, w / 2 + view.x * dpr, h / 2 + view.y * dpr);
+  const focus = selected || (hover && hover.id);
+  const near = new Set();
+  if (focus) { near.add(focus); for (const l of links) { if (l.s.id === focus) near.add(l.t.id); if (l.t.id === focus) near.add(l.s.id); } }
+  for (const l of links) {
+    const dim = focus && !(near.has(l.s.id) && near.has(l.t.id) && (l.s.id === focus || l.t.id === focus));
+    ctx.globalAlpha = dim ? 0.12 : l.kind === "met" ? 0.55 : 0.85;
+    ctx.strokeStyle = l.kind === "met" ? css("--faint") : l.kind === "same_org" ? css("--ok") : css("--accent");
+    ctx.lineWidth = (l.kind === "met" ? 1 : 1.6) * Math.min(3, l.weight || 1) / view.k ** 0.3;
+    ctx.setLineDash(l.kind === "same_event" ? [5, 4] : []);
+    ctx.beginPath(); ctx.moveTo(l.s.x, l.s.y); ctx.lineTo(l.t.x, l.t.y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  for (const n of nodes) {
+    const r = radius(n), dim = focus && !near.has(n.id);
+    ctx.globalAlpha = dim ? 0.25 : 1;
+    ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 7);
+    ctx.fillStyle = n.kind === "me" ? css("--accent") : orgColor(n.org);
+    ctx.fill();
+    if (n.id === selected || n === hover) { ctx.lineWidth = 3; ctx.strokeStyle = css("--ink"); ctx.stroke(); }
+    if (n.followups) { ctx.beginPath(); ctx.arc(n.x + r * 0.75, n.y - r * 0.75, 3.5, 0, 7); ctx.fillStyle = css("--warn"); ctx.fill(); }
+    ctx.fillStyle = css("--ink");
+    ctx.font = `${n.kind === "me" ? 700 : 500} ${12 / Math.min(1.4, view.k) ** 0.5}px -apple-system, system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(n.name, n.x, n.y + r + 14);
+    if (n.org && view.k > 0.8 && !dim) {
+      ctx.fillStyle = css("--muted"); ctx.font = `11px -apple-system, system-ui, sans-serif`;
+      ctx.fillText(n.org, n.x, n.y + r + 27);
+    }
+  }
+  ctx.globalAlpha = 1;
+  requestAnimationFrame(draw);
+}
+
+function toWorld(e) {
+  const b = cv.getBoundingClientRect();
+  return { x: (e.clientX - b.left - b.width / 2 - view.x) / view.k, y: (e.clientY - b.top - b.height / 2 - view.y) / view.k };
+}
+function hit(p) { return nodes.find(n => Math.hypot(n.x - p.x, n.y - p.y) < radius(n) + 6); }
+let drag = null, pan = null, moved = false, pointers = new Map(), pinch = null;
+cv.addEventListener("pointerdown", e => {
+  cv.setPointerCapture(e.pointerId); pointers.set(e.pointerId, e); moved = false;
+  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), k: view.k }; drag = pan = null; return; }
+  const n = hit(toWorld(e));
+  if (n && n.kind !== "me") drag = n; else pan = { x: e.clientX - view.x, y: e.clientY - view.y };
+});
+cv.addEventListener("pointermove", e => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, e);
+  if (pinch && pointers.size === 2) { const [a, b] = [...pointers.values()]; view.k = Math.max(0.3, Math.min(3, pinch.k * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / pinch.d)); return; }
+  if (drag) { const p = toWorld(e); drag.x = p.x; drag.y = p.y; heat = Math.max(heat, 0.3); moved = true; return; }
+  if (pan) { view.x = e.clientX - pan.x; view.y = e.clientY - pan.y; moved = true; return; }
+  const n = hit(toWorld(e)); hover = n || null; cv.style.cursor = n ? "pointer" : "grab";
+});
+cv.addEventListener("pointerup", e => {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (!moved) { const n = hit(toWorld(e)); if (n && n.kind === "person") openPerson(n.id); else if (!n) { selected = null; render(); } }
+  drag = pan = null;
+});
+cv.addEventListener("wheel", e => { e.preventDefault(); view.k = Math.max(0.3, Math.min(3, view.k * Math.exp(-e.deltaY * 0.0015))); }, { passive: false });
+addEventListener("resize", size);
+
+// ---------- side panel ----------
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  tab = b.dataset.tab; selected = null;
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  render();
+});
+
+async function openPerson(id) {
+  selected = id;
+  const side = $("#side");
+  try {
+    const p = await get(`/people/${id}`);
+    if (selected !== id) return;
+    side.innerHTML = `
+      <button class="back" onclick="selected=null;render()">‹ All people</button>
+      <p class="big">${esc(p.name)}</p>
+      <p class="sub">${esc([p.role, p.org].filter(Boolean).join(" at ") || "No details yet")}</p>
+      <div class="k">Met</div>
+      <div>${p.times_met}× · first ${ago(p.first_met)} · last ${ago(p.last_seen)}</div>
+      <div>${p.has_voice ? `<span class="chip">voiceprint · ${p.voice_samples} samples</span>` : `<span class="chip">no voiceprint</span>`}</div>
+      ${p.followups.length ? `<div class="k">Follow up</div><ul>${p.followups.map(f => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
+      ${p.facts.length ? `<div class="k">Remember</div><ul>${p.facts.map(f => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
+      ${p.said.length ? `<div class="k">What they said</div>${p.said.map(s => `<div class="said">${esc(s.text)}<small>${ago(s.ts)}</small></div>`).join("")}` : ""}`;
+  } catch (e) { side.innerHTML = `<p class="err">Couldn't load that person.</p>`; }
+}
+
+function render() {
+  const side = $("#side");
+  if (selected) return openPerson(selected);
+  if (tab === "people") {
+    const q = query.toLowerCase();
+    const list = people.filter(p => !q || [p.name, p.role, p.org, ...p.facts].join(" ").toLowerCase().includes(q));
+    side.innerHTML = `<input class="search" placeholder="Search people, orgs, notes" value="${esc(query)}" oninput="query=this.value;render();this.focus();this.setSelectionRange(this.value.length,this.value.length)">
+      ${list.map(p => `<div class="row" onclick="openPerson('${p.id}')"><b>${esc(p.name)}</b><span>${esc([p.role, p.org].filter(Boolean).join(" at ") || "No details yet")} · ${ago(p.last_seen)}</span></div>`).join("") || `<p class="sub">No one yet.</p>`}`;
+    if (q) { const s = side.querySelector(".search"); s.focus(); }
+  } else if (tab === "events") {
+    side.innerHTML = sessions.map(s => `<div class="row"><b>${new Date(s.started * 1000).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</b>
+      <span>${s.turns} turns · ${s.people.length} ${s.people.length === 1 ? "person" : "people"}</span>
+      <div style="margin-top:6px">${s.people.map(p => `<span class="chip" style="cursor:pointer" onclick="event.stopPropagation();openPerson('${p.id}')">${esc(p.name)}</span>`).join("")}</div></div>`).join("") || `<p class="sub">No events yet.</p>`;
+  } else {
+    side.innerHTML = `<div class="ask"><input class="search" style="margin:0" id="q" placeholder="Who was hiring interns?"><button onclick="ask()">Ask</button></div><div id="ans"></div>`;
+    $("#q").onkeydown = e => { if (e.key === "Enter") ask(); };
+  }
+}
+
+async function ask() {
+  const q = $("#q").value.trim(); if (!q) return;
+  $("#ans").innerHTML = `<div class="answer">Thinking…</div>`;
+  try {
+    const r = await fetch(API + "/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }) }).then(r => r.json());
+    $("#ans").innerHTML = `<div class="answer">${esc(r.answer)}</div>`;
+  } catch { $("#ans").innerHTML = `<p class="err">Backend unreachable.</p>`; }
+}
+
+async function refresh() {
+  try {
+    const [g, p, s, h] = await Promise.all([get("/graph"), get("/people"), get("/sessions"), get("/health")]);
+    const sig = JSON.stringify([g.nodes.map(n => n.id + n.times_met + n.org), g.links.length]);
+    if (sig !== refresh.sig) { setGraph(g); refresh.sig = sig; }
+    const changed = JSON.stringify(p) !== JSON.stringify(people) || s.length !== sessions.length;
+    people = p; sessions = s;
+    $("#stats").textContent = `${p.length} ${p.length === 1 ? "person" : "people"} · ${s.length} events${h.wearer_enrolled ? "" : " · your voice not recorded yet"}`;
+    if (changed && !(tab === "ask")) render();
+  } catch { $("#stats").textContent = "backend unreachable"; }
+}
+
+size(); render(); refresh(); setInterval(refresh, 4000); requestAnimationFrame(draw);
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+backend/.venv/
+backend/models/
+backend/earshot.db
+backend/__pycache__/
+.run/
+ios/*.xcodeproj/xcuserdata/
+ios/build/
+ios/build-device/
