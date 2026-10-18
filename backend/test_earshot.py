@@ -107,3 +107,13 @@ def test_llm_extracts_role_and_org():
     about = earshot.extract_about("Hi, I'm Maya Chen, I'm a product manager at Stripe and we're hiring interns.")
     assert about["name"] == "Maya Chen"
     assert "stripe" in about["org"].lower()
+
+
+@pytest.mark.skipif(os.environ.get("EARSHOT_WHISPER") == "off", reason="transcriber off")
+def test_server_transcribes_when_phone_sends_no_text():
+    # Fresh voice, no transcript from the phone: the server hears the name itself.
+    earshot._con.execute("DELETE FROM people")
+    earshot._con.commit()
+    r = c.post("/turn", json={"text": "", "audio_b64": wav("maya_intro")}).json()
+    assert r["transcribed_by"] == "server" and "Maya Chen" in r["text"]
+    assert r["event"] == "new_person" and r["person"]["name"] == "Maya Chen"

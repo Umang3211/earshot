@@ -51,10 +51,14 @@ LLM_OFF = os.environ.get("EARSHOT_LLM", "on") == "off"
 # never get swapped. Recalibrate on real recordings.
 VOICE_THRESHOLD = 0.42
 VOICE_MARGIN = 0.08
+# Backup transcriber for turns that arrive without text (phone speech
+# recognition failed or isn't available, e.g. the simulator).
+WHISPER_MODEL = os.environ.get("EARSHOT_WHISPER", "small.en")
+
 # Only confident matches update a stored voiceprint.
 LEARN_THRESHOLD = 0.50
 # Under this much audio the embedding is noise; attribute to the last speaker.
-MIN_EMBED_SECONDS = 1.2
+MIN_EMBED_SECONDS = 1.0
 # A "nice to meet you, Sam" from the wearer names whoever spoke in this window.
 NAMING_WINDOW = 90.0
 # Never re-whisper the same person inside one session more often than this.
@@ -212,6 +216,42 @@ def embed(wav: bytes) -> tuple[np.ndarray | None, float]:
         v = _unit(np.asarray(ex.compute(st), dtype=np.float32).flatten())
         parts.append(v / np.sqrt(len(exs)))
     return np.concatenate(parts), seconds
+
+
+_whisper = None
+
+
+def transcribe(wav: bytes) -> str:
+    global _whisper
+    if WHISPER_MODEL == "off":
+        return ""
+    try:
+        if _whisper is None:
+            from faster_whisper import WhisperModel
+            _whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+        audio, sr = sf.read(io.BytesIO(wav), dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        if sr != 16000:
+            audio = np.interp(np.arange(0, len(audio), sr / 16000), np.arange(len(audio)), audio).astype(np.float32)
+        segs, _ = _whisper.transcribe(audio, beam_size=1, language="en", vad_filter=True)
+        return " ".join(s.text.strip() for s in segs).strip()
+    except Exception as e:
+        print(f"[earshot] whisper failed: {e}")
+        return ""
+
+
+@app.on_event("startup")
+def _warm() -> None:
+    # Load both voice models and the transcriber before the first turn.
+    _bg.submit(extractors)
+    _bg.submit(lambda: transcribe(_silence_wav()))
+
+
+def _silence_wav() -> bytes:
+    b = io.BytesIO()
+    sf.write(b, np.zeros(16000, dtype=np.float32), 16000, format="WAV")
+    return b.getvalue()
 
 
 # --------------------------------------------------------------------------
@@ -588,8 +628,16 @@ def turn(body: TurnIn) -> dict:
     now = body.ts or time.time()
     text = body.text.strip()
     vec, secs = (None, 0.0)
+    transcribed = False
     if body.audio_b64:
-        vec, secs = embed(base64.b64decode(body.audio_b64))
+        wav = base64.b64decode(body.audio_b64)
+        if os.environ.get("EARSHOT_DUMP"):
+            d = Path(os.environ["EARSHOT_DUMP"]); d.mkdir(parents=True, exist_ok=True)
+            (d / f"{time.time():.2f}.wav").write_bytes(wav)
+        vec, secs = embed(wav)
+        if not text and secs >= 0.8:
+            text = transcribe(wav)
+            transcribed = bool(text)
 
     with _lock:
         kind, key, sim = identify(s, vec)
@@ -712,6 +760,8 @@ def turn(body: TurnIn) -> dict:
         "sim": round(sim, 3),
         "speech_seconds": round(secs, 1),
         "event": event,
+        "text": text,
+        "transcribed_by": "server" if transcribed else "phone",
         "named_cluster": named_cluster,
         "whisper": whisper,
     }

@@ -31,6 +31,7 @@ struct TurnReply: Codable {
     let sim: Double
     let speech_seconds: Double
     let event: String
+    let text: String?
     let named_cluster: String?
     let whisper: String
 }

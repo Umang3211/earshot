@@ -6,7 +6,11 @@ import Speech
 enum Turns {
     /// Trailing quiet that closes a turn. Short, so back-and-forth between two
     /// people splits into separate turns that can each be fingerprinted.
-    static let trailingSilence: Double = 0.8
+    static let trailingSilence: Double = 1.0
+    /// Under this a turn is too short to fingerprint well...
+    static let fingerprintable: Double = 3.0
+    /// ...so it only ends after this much quiet.
+    static let shortTurnSilence: Double = 2.2
     /// Shorter than this is a cough, not a turn.
     static let minimum: Double = 0.6
     /// Long monologues are cut here so whispers aren't held up.
@@ -70,6 +74,7 @@ final class Listener: ObservableObject {
     private var onDeviceBroken = false
     /// Keeps the app the "now playing" app so AirPods presses reach us.
     private let silence = AVAudioPlayerNode()
+    private let silenceFormat = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
 
     static func requestPermissions() async -> String? {
         let mic = await AVAudioApplication.requestRecordPermission()
@@ -91,6 +96,12 @@ final class Listener: ObservableObject {
         } catch {
             problem = "Couldn't start the mic: \(error.localizedDescription)"
             return
+        }
+        // stop() drops scheduled buffers, so queue a second of silence on a
+        // loop every time we start.
+        if let buf = AVAudioPCMBuffer(pcmFormat: silenceFormat, frameCapacity: 44_100) {
+            buf.frameLength = 44_100
+            silence.scheduleBuffer(buf, at: nil, options: .loops, completionHandler: nil)
         }
         silence.play()
         newRecognitionTask()
@@ -144,12 +155,9 @@ final class Listener: ObservableObject {
         guard format.sampleRate > 0 else { throw NSError(domain: "earshot", code: 1, userInfo: [NSLocalizedDescriptionKey: "no microphone input"]) }
         if !engine.attachedNodes.contains(silence) {
             engine.attach(silence)
-            engine.connect(silence, to: engine.mainMixerNode, format: nil)
-            if let f = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1),
-               let buf = AVAudioPCMBuffer(pcmFormat: f, frameCapacity: 44_100) {
-                buf.frameLength = 44_100  // zeros
-                silence.scheduleBuffer(buf, at: nil, options: .loops)
-            }
+            // The connection format must match the buffer we loop, or
+            // scheduleBuffer throws and takes the app down.
+            engine.connect(silence, to: engine.mainMixerNode, format: silenceFormat)
         }
         if tapInstalled { input.removeTap(onBus: 0) }
         let state = tap
@@ -251,7 +259,10 @@ final class Listener: ObservableObject {
         }
         let length = now - first
         let quiet = now - last
-        guard (quiet >= Turns.trailingSilence && length >= Turns.minimum) || length >= Turns.ceiling else { return }
+        // Real conversation comes in 1 s bursts, too short to fingerprint. A
+        // short turn waits longer for more speech before it is sent.
+        let needQuiet = length < Turns.fingerprintable ? Turns.shortTurnSilence : Turns.trailingSilence
+        guard (quiet >= needQuiet && length >= Turns.minimum) || length >= Turns.ceiling else { return }
         let text = partial
         let pcm = tap.take()
         partial = ""

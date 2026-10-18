@@ -97,8 +97,10 @@ final class Brain: ObservableObject {
                 case "person": who = r.person?.name ?? "?"
                 default: who = r.cluster ?? "Someone"
                 }
-                if !t.text.isEmpty || r.speaker != "unknown" {
-                    lines.append(Line(who: who, kind: r.speaker, text: t.text.isEmpty ? "…" : t.text, match: r.sim))
+                // The server transcribes when the phone's recogniser came back empty.
+                let said = t.text.isEmpty ? (r.text ?? "") : t.text
+                if !said.isEmpty || r.speaker != "unknown" {
+                    lines.append(Line(who: who, kind: r.speaker, text: said.isEmpty ? "…" : said, match: r.sim))
                     if lines.count > 80 { lines.removeFirst(lines.count - 80) }
                 }
                 if let c = r.named_cluster, let p = r.person {
