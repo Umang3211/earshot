@@ -12,6 +12,7 @@ Run: uvicorn earshot:app --host 0.0.0.0 --port 8100
 from __future__ import annotations
 
 import base64
+import collections
 import io
 import json
 import os
@@ -54,6 +55,17 @@ VOICE_MARGIN = 0.08
 # Backup transcriber for turns that arrive without text (phone speech
 # recognition failed or isn't available, e.g. the simulator).
 WHISPER_MODEL = os.environ.get("EARSHOT_WHISPER", "small.en")
+
+# Unidentified voices in a session are regrouped from scratch on every turn
+# (average-linkage clustering over all of them), then any voice heard only
+# once is folded into its nearest group. Tuned on real far-field meetings
+# (AMI ES2004a/IS1009a) + synthetic voices mixed into a real room recording
+# (backend/bench/): one person alone stays one voice, meetings F 0.81 vs 0.78
+# for the old greedy matcher (which split 4 people into 28 voices). Passing range
+# is 0.36-0.45 at absorb 0.20; 0.36 is the only one that never split a lone speaker.
+SESSION_LINK = 0.36
+SESSION_ABSORB = 0.20
+SESSION_POOL = 200
 
 # Only confident matches update a stored voiceprint.
 LEARN_THRESHOLD = 0.50
@@ -463,10 +475,58 @@ def brief_for(pid: str) -> str:
 @dataclass
 class Cluster:
     label: str
-    vec: np.ndarray
+    vecs: list[np.ndarray] = field(default_factory=list)
     turn_ids: list[int] = field(default_factory=list)
     texts: list[str] = field(default_factory=list)
     last_ts: float = 0.0
+
+    @property
+    def vec(self) -> np.ndarray:
+        return _unit(np.mean(self.vecs, axis=0))
+
+
+def group_voices(V: np.ndarray, link: float = SESSION_LINK, absorb: float = SESSION_ABSORB) -> list[list[int]]:
+    """Average-linkage clustering of unit voice vectors, then singletons are
+    folded into the nearest multi-turn group when they clear `absorb`: one
+    turn of room audio is too noisy to justify a new person on its own."""
+    n = len(V)
+    if n == 0:
+        return []
+    S = V @ V.T
+    groups = [[i] for i in range(n)]
+    tot = S.copy()                      # sum of pairwise sims between groups
+    size = np.ones(n)
+    alive = np.ones(n, bool)
+    np.fill_diagonal(tot, -np.inf)
+    while alive.sum() > 1:
+        avg = tot / np.outer(size, size)
+        avg[~alive, :] = -np.inf
+        avg[:, ~alive] = -np.inf
+        np.fill_diagonal(avg, -np.inf)
+        a, b = np.unravel_index(np.argmax(avg), avg.shape)
+        if avg[a, b] < link:
+            break
+        groups[a] += groups[b]
+        tot[a, :] += tot[b, :]
+        tot[:, a] += tot[:, b]
+        tot[a, a] = -np.inf
+        size[a] += size[b]
+        alive[b] = False
+    out = [groups[i] for i in range(n) if alive[i]]
+    big = [g for g in out if len(g) >= 2]
+    if not big:
+        return out
+    merged = [list(g) for g in big]
+    for g in out:
+        if len(g) >= 2:
+            continue
+        sims = [float(S[np.ix_(g, m)].mean()) for m in merged]
+        j = int(np.argmax(sims))
+        if sims[j] >= absorb:
+            merged[j] += g
+        else:
+            merged.append(list(g))
+    return merged
 
 
 @dataclass
@@ -496,6 +556,43 @@ def session(sid: str | None) -> Session:
         )
         _con.commit()
         return s
+
+
+def regroup(s: Session) -> None:
+    """Re-cluster every unidentified turn in the session and keep labels
+    stable: a new group takes the old label it shares the most turns with."""
+    members = [(tid, v, txt, ts) for c in s.clusters.values()
+               for tid, v, txt, ts in zip(c.turn_ids, c.vecs, c.texts, [c.last_ts] * len(c.vecs))]
+    members.sort(key=lambda m: m[0])
+    members = members[-SESSION_POOL:]
+    if not members:
+        s.clusters = {}
+        return
+    groups = group_voices(np.array([m[1] for m in members]))
+    old = {tid: c.label for c in s.clusters.values() for tid in c.turn_ids}
+    # biggest groups pick first
+    groups.sort(key=len, reverse=True)
+    taken: set[str] = set()
+    fresh: dict[str, Cluster] = {}
+    for g in groups:
+        votes = collections.Counter(old.get(members[i][0]) for i in g)
+        label = next((l for l, _ in votes.most_common()
+                      if l and not l.startswith("__") and l not in taken), None)
+        if label is None:
+            s.voices_seen += 1
+            label = f"voice {s.voices_seen}"
+        taken.add(label)
+        c = Cluster(label=label)
+        for i in sorted(g):
+            tid, v, txt, ts = members[i]
+            c.turn_ids.append(tid); c.vecs.append(v); c.texts.append(txt)
+            c.last_ts = max(c.last_ts, ts)
+        fresh[label] = c
+        moved = [members[i][0] for i in g if old.get(members[i][0]) != label]
+        if moved:
+            q = ",".join("?" * len(moved))
+            _con.execute(f"UPDATE turns SET cluster = ? WHERE id IN ({q})", (label, *moved))
+    s.clusters = fresh
 
 
 def _find_by_name(name: str) -> sqlite3.Row | None:
@@ -546,7 +643,8 @@ def _promote(s: Session, cl: Cluster, name: str, now: float) -> tuple[str, bool]
 
 
 def identify(s: Session, vec: np.ndarray | None) -> tuple[str, str | None, float]:
-    """-> (kind, key, sim). kind is 'me' | 'person' | 'cluster' | 'none'."""
+    """Match against you and saved people. -> (kind, key, sim); kind is
+    'me' | 'person' | 'cluster' (unidentified, key None) | 'none' (no audio)."""
     if vec is None:
         if s.last_speaker:
             return s.last_speaker[0], s.last_speaker[1], 0.0
@@ -559,8 +657,6 @@ def identify(s: Session, vec: np.ndarray | None) -> tuple[str, str | None, float
         pv = _vec(r["voice"])
         if pv is not None and pv.shape == vec.shape:
             cands.append((float(vec @ pv), "person", r["id"]))
-    for c in s.clusters.values():
-        cands.append((float(vec @ c.vec), "cluster", c.label))
     cands.sort(reverse=True)
     if cands and cands[0][0] >= VOICE_THRESHOLD:
         best = cands[0]
@@ -644,26 +740,24 @@ def turn(body: TurnIn) -> dict:
 
     with _lock:
         kind, key, sim = identify(s, vec)
+    # A new voice introducing itself becomes a person from this turn alone, so
+    # the name can't land on whichever group the turn would have joined.
+    about: dict | None = None
+    if kind == "cluster" and key is None and vec is not None and _INTRO_CUE.search(text):
+        about = extract_about(text)  # the model can take a couple of seconds
+
+    with _lock:
         whisper = ""
         event = ""
         pid: str | None = None
         cluster_label: str | None = None
         named_cluster: str | None = None
 
-        if kind == "cluster" and key is None:
-            if vec is None:
-                kind = "none"
-            else:
-                s.voices_seen += 1
-                label = f"voice {s.voices_seen}"
-                s.clusters[label] = Cluster(label=label, vec=vec)
-                key = label
-        if kind == "cluster":
-            cl = s.clusters[key]
-            if vec is not None and sim >= LEARN_THRESHOLD:
-                cl.vec = _blend(cl.vec, vec, 0.8)
-            cluster_label = key
-        elif kind == "person":
+        if kind == "cluster" and key is not None and key not in s.clusters:
+            key = None
+        if kind == "cluster" and key is None and vec is None:
+            kind = "none"
+        if kind == "person":
             pid = key
             if vec is not None and sim >= LEARN_THRESHOLD:
                 r = person_row(pid)
@@ -682,33 +776,39 @@ def turn(body: TurnIn) -> dict:
         cur = _con.execute(
             "INSERT INTO turns (session, ts, speaker, person_id, cluster, text, sim) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (s.id, now, speaker, pid, cluster_label, text, round(sim, 3)),
+            (s.id, now, speaker, pid, key if kind == "cluster" else None, text, round(sim, 3)),
         )
         turn_id = cur.lastrowid
+
+        if kind == "cluster" and vec is not None and about and about["name"]:
+            first = Cluster(label="", vecs=[vec], turn_ids=[turn_id], texts=[text], last_ts=now)
+            pid, created = _promote(s, first, about["name"], now)
+            apply_about(pid, about)
+            event = "new_person" if created else "voice_linked"
+            # Unnamed turns earlier in the session that clearly sound like them.
+            for c in list(s.clusters.values()):
+                if float(np.mean([v @ vec for v in c.vecs])) >= LEARN_THRESHOLD:
+                    named_cluster = c.label
+                    _promote(s, c, about["name"], now)
+            kind = "person"
+        elif kind == "cluster" and vec is not None:
+            s.clusters["__new"] = Cluster(label="__new", vecs=[vec], turn_ids=[turn_id], texts=[text], last_ts=now)
+            regroup(s)
+            key = next(c.label for c in s.clusters.values() if turn_id in c.turn_ids)
+            cluster_label = key
+        elif kind == "cluster":
+            # Too short to fingerprint: it belongs to whoever was talking.
+            cluster_label = key
+
         if kind in ("me", "person", "cluster"):
-            s.last_speaker = (kind, key)
-        if kind in ("person", "cluster"):
-            s.last_other = (kind, key, now)
-        if kind == "cluster":
-            s.clusters[key].turn_ids.append(turn_id)
-            s.clusters[key].texts.append(text)
-            s.clusters[key].last_ts = now
+            s.last_speaker = (kind, pid if kind == "person" else key)
+        if kind == "person":
+            s.last_other = ("person", pid, now)
+        elif kind == "cluster":
+            s.last_other = ("cluster", key, now)
         _con.commit()
 
-    # Names. Done outside the lock: the model can take a couple of seconds.
-    about: dict | None = None
-    if kind == "cluster" and _INTRO_CUE.search(text):
-        about = extract_about(text)
-        name = about["name"]
-        if name:
-            with _lock:
-                cl = s.clusters.get(key)
-                if cl is not None:
-                    named_cluster = cl.label
-                    pid, created = _promote(s, cl, name, now)
-                    apply_about(pid, about)
-                    event = "new_person" if created else "voice_linked"
-    elif kind == "me" and s.last_other and s.last_other[0] == "cluster":
+    if kind == "me" and s.last_other and s.last_other[0] == "cluster":
         name = regex_greeting(text)
         if name and now - s.last_other[2] <= NAMING_WINDOW:
             with _lock:

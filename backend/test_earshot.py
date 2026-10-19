@@ -117,3 +117,84 @@ def test_server_transcribes_when_phone_sends_no_text():
     r = c.post("/turn", json={"text": "", "audio_b64": wav("maya_intro")}).json()
     assert r["transcribed_by"] == "server" and "Maya Chen" in r["text"]
     assert r["event"] == "new_person" and r["person"]["name"] == "Maya Chen"
+
+
+# ---- voice grouping, on voiceprints saved from backend/bench/ --------------
+# one0-3: one AMI speaker alone, 12 turns each. room_*: 3 synthetic voices
+# mixed into a real room recording plus real room turns ('?room').
+# ES2004a/IS1009a: two real 4-person far-field meetings.
+
+import collections as _c
+import numpy as _np
+
+_G = _np.load(TD / "voice_groups.npz")
+
+
+def _f_score(labels, spk, lens):
+    w = _c.Counter()
+    for l, s, n in zip(labels, spk, lens):
+        w[(l, s)] += n
+    tot = sum(w.values())
+    pur = sum(max(v for (c, _), v in w.items() if c == cl) for cl in {c for c, _ in w}) / tot
+    cov = sum(max(v for (_, s), v in w.items() if s == sp) for sp in {s for _, s in w}) / tot
+    return 2 * pur * cov / (pur + cov)
+
+
+def _labels(groups, n):
+    lab = [None] * n
+    for g, m in enumerate(groups):
+        for i in m:
+            lab[i] = g
+    return lab
+
+
+def test_one_person_stays_one_voice():
+    for k in range(4):
+        assert len(earshot.group_voices(_G[f"one{k}"])) == 1, f"speaker {k} split"
+
+
+def test_three_voices_in_a_real_room_stay_apart():
+    V, spk = _G["room_vecs"], _G["room_spk"]
+    lab = _labels(earshot.group_voices(V), len(V))
+    known = [(l, s) for l, s in zip(lab, spk) if not s.startswith("?")]
+    groups = {s: {l for l, s2 in known if s2 == s} for s in {s for _, s in known}}
+    assert all(len(g) == 1 for g in groups.values()), groups          # each voice one group
+    assert len({next(iter(g)) for g in groups.values()}) == 3          # three different groups
+
+
+def test_real_meetings_split_by_person():
+    fs = []
+    for m in ("ES2004a", "IS1009a"):
+        V = _G[f"{m}_vecs"]
+        lab = _labels(earshot.group_voices(V), len(V))
+        fs.append(_f_score(lab, _G[f"{m}_spk"], _G[f"{m}_len"]))
+    assert _np.mean(fs) >= 0.80, fs
+
+
+def test_unnamed_voices_get_stable_separate_labels():
+    """No introductions: Maya and Arjun (with room-ish noise) each keep one label."""
+    import io
+    import soundfile as sf
+    rng = _np.random.default_rng(0)
+
+    def noisy(name):
+        a, sr = sf.read(TD / f"{name}.wav", dtype="float32")
+        a = a + rng.normal(0, _np.sqrt((a ** 2).mean()) / 4, len(a)).astype("float32")
+        b = io.BytesIO(); sf.write(b, a, sr, format="WAV")
+        return base64.b64encode(b.getvalue()).decode()
+
+    earshot._con.execute("DELETE FROM people")
+    earshot._con.commit()
+    sid = None
+    got = []
+    for clip, who in [("maya_2", "maya"), ("arjun_intro", "arjun"), ("maya_later", "maya"),
+                      ("arjun_later", "arjun"), ("maya_2", "maya")]:
+        r = c.post("/turn", json={"session": sid, "text": "", "audio_b64": noisy(clip)}).json()
+        sid = r["session"]
+        got.append((who, r["cluster"]))
+    s = earshot._sessions[sid]
+    final = {tid: cl.label for cl in s.clusters.values() for tid in cl.turn_ids}
+    by = _c.defaultdict(set)
+    for (who, _), tid in zip(got, sorted(final)):
+        by[who].add(final[tid])
+    assert len(by["maya"]) == 1 and len(by["arjun"]) == 1 and by["maya"] != by["arjun"], by
